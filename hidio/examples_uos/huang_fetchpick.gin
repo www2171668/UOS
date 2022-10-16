@@ -1,0 +1,5 @@
+
+include 'huang_fetchreach.gin'
+
+create_environment.env_name='FetchPickAndPlace-v1'
+

@@ -1,0 +1,2 @@
+include 'sac_fetchreach.gin'
+create_environment.env_name='FetchPickAndPlace-v1'

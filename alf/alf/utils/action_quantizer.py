@@ -1,0 +1,96 @@
+
+"""Action Quantizer."""
+
+from absl import logging
+import numpy as np
+import functools
+
+import torch
+
+import alf
+
+
+@alf.configurable
+class ActionQuantizer(object):
+    def __init__(self,
+                 action_spec,
+                 sampling_method="uniform",
+                 action_bins=7,
+                 rep_mode="center"):
+        """Quantize actions in a specified way.
+
+        Args:
+            action_spec (BoundedTensorSpec): action spec
+            sampling_method (str): sampling space, uniform or log space：
+
+                - "uniform": the original space
+                - "log": the logarithm space
+
+            action_bins (int): number of bins used for discretization
+            rep_mode (str): the mode of representation for quantization:
+
+                - "center": linspace(lb + bin-size/2, ub - bin_size/2, bin_num)
+                - "boundary": linspace(lower_bound, upper_bound, bin_num)
+        """
+        super().__init__()
+
+        self._action_spec = action_spec
+        self._action_bins = action_bins
+
+        self._sampling_method = sampling_method
+        self._rep_mode = rep_mode
+
+        # action_dim: the length of the continious control vector
+        # action_bins: the number of elements per action_dim
+
+        self._action_dim = action_spec.shape[0]
+        assert (() == action_spec.maximum.shape) and \
+                (() == action_spec.minimum.shape), \
+                    "Only support scalar action maximum and minimum bound"
+
+        self._upper_bound = np.asscalar(action_spec.maximum)
+        self._lower_bound = np.asscalar(action_spec.minimum)
+
+        # TODO: currently use the same quantization across action dims;
+        # can make it different for different dims in the future
+        if self._sampling_method == "uniform":
+            if self._rep_mode == "center":
+                bin_size = (
+                    self._upper_bound - self._lower_bound) / self._action_bins
+                # [lb + bin_size/2, up - bin_size/2]
+                # center value representation
+                LUT_BA = torch.linspace(
+                    self._lower_bound + bin_size / 2,
+                    self._upper_bound - bin_size / 2,
+                    steps=self._action_bins)
+            elif self._rep_mode == "boundary":
+                LUT_BA = torch.linspace(
+                    self._lower_bound,
+                    self._upper_bound,
+                    steps=self._action_bins)
+        else:
+            raise NotImplementedError("Unimplemented sampling method!")
+
+        # look-up-table, bin-to-action mapping
+        self._LUT_BA = LUT_BA
+
+        self._bin_size = self._LUT_BA[1] - self._LUT_BA[0]
+
+    def ind_to_action(self, action_ind):
+        action = action_ind * self._bin_size + self._LUT_BA[0]
+        return action
+
+    def action_to_ind(self, action):
+        bin_size = self._bin_size
+        if self._rep_mode == "center":
+            action_ind = torch.round((action - self._LUT_BA[0]) / bin_size)
+        elif self._rep_mode == "boundary":
+            action_ind = (action - self._LUT_BA[0]) // (bin_size)
+        else:
+            raise NotImplementedError("Unsupported representation mode!")
+
+        return action_ind
+
+    @property
+    def action_bins(self):
+        return self._action_bins

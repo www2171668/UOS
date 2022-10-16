@@ -1,0 +1,77 @@
+
+#
+"""A few metrics.
+Code adapted from https://github.com/tensorflow/agents/blob/master/tf_agents/metrics/tf_metric.py
+"""
+
+import alf
+import os
+
+import torch
+from torch import nn
+
+
+class StepMetric(nn.Module):
+    """Defines the interface for metrics."""
+
+    def __init__(self, name, dtype, prefix='Metrics'):
+        super().__init__()
+        self.name = name
+        self._dtype = dtype
+        self._prefix = prefix
+
+    def __call__(self, *args, **kwargs):
+        return self.call(*args, **kwargs)
+
+    def call(self, *args, **kwargs):
+        """Accumulates statistics for the metric.
+
+        Args:
+            *args:
+            **kwargs: A mini-batch of inputs to the Metric.
+        """
+        raise NotImplementedError(
+            'Metrics must define a call() member function')
+
+    def forward(self, *args, **kwargs):
+        pass
+
+    def reset(self):
+        """Resets the values being tracked by the metric."""
+        raise NotImplementedError(
+            'Metrics must define a reset() member function')
+
+    def result(self):
+        """Computes and returns a final value for the metric."""
+        raise NotImplementedError(
+            'Metrics must define a result() member function')
+
+    def gen_summaries(self, train_step=None, step_metrics=()):
+        """Generates summaries against train_step and all step_metrics.
+
+        Args:
+            train_step: (Optional) Step counter for training iterations. If None, no
+                metric is generated against the global step.
+            step_metrics: (Optional) Iterable of step metrics to generate summaries
+                against.
+        """
+        prefix = self._prefix
+        result = self.result()
+
+        if not (isinstance(result, dict) or alf.nest.is_namedtuple(result)):
+            result = {self.name: result}
+
+        def _gen_summary(name, res):
+            tag = os.path.join(prefix, name)
+            if train_step is not None:
+                alf.summary.scalar(name=tag, data=res, step=train_step)  # get_global_counter
+            for step_metric in step_metrics:
+                # Skip plotting the metrics against itself.
+                if self.name == step_metric.name:
+                    continue
+                step_tag = '{}_vs_{}/{}'.format(prefix, step_metric.name, name)
+                # Summaries expect the step value to be an int64.
+                step = step_metric.result().to(torch.int64)
+                alf.summary.scalar(name=step_tag, data=res, step=step)  # total unroll step, 对应max_env_steps
+
+        alf.nest.py_map_structure_with_path(_gen_summary, result)

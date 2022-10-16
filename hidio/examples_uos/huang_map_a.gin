@@ -1,0 +1,134 @@
+
+include 'benchmarks/huang_map.gin'
+import alf.algorithms.data_transformer
+
+# ========= 加载环境 =========
+import alf.environments.suite_maps
+
+max_episode_step=200
+create_environment.env_name='map_a'
+create_environment.num_parallel_environments=1
+create_environment.env_load_fn=@suite_maps.load
+suite_maps.load.max_episode_steps=%max_episode_step  # 最大步长，优先级高于PlayGround.max_steps
+
+# ========= 下层网络，预处理器，算法，训练配置 =========
+fix/AdamTF.lr=0
+AdamTF.lr=0.001
+tau=0.001
+target_update_period=1
+actor/NestSum.activation=@torch.relu
+critic/NestSum.activation=@torch.relu
+
+# =====》actor
+low/ActorDistributionNetwork.input_preprocessors=%low_input_preprocessors
+low/ActorDistributionNetwork.preprocessing_combiner=@actor/NestSum()
+low/ActorDistributionNetwork.fc_layer_params=%low_hidden_layers
+low/ActorDistributionNetwork.continuous_projection_net_ctor=@NormalProjectionNetwork
+
+# =====》critic
+low/CriticNetwork.observation_input_processors=%low_input_preprocessors
+low/CriticNetwork.observation_preprocessing_combiner=@critic/NestSum()
+low/CriticNetwork.joint_fc_layer_params=%low_hidden_layers
+
+# =====》target
+low/calc_default_target_entropy.min_prob=0.2
+low/SacAlgorithm.target_entropy=@low/calc_default_target_entropy
+low/SacAlgorithm.target_update_tau=%tau
+low/SacAlgorithm.target_update_period=%target_update_period
+
+# =====》SAC & optimizer
+low/SacAlgorithm.name="Lower_level_SAC"
+low/SacAlgorithm.actor_network_cls=@low/ActorDistributionNetwork
+low/SacAlgorithm.critic_network_cls=@low/CriticNetwork
+
+low/SacAlgorithm.actor_optimizer=@AdamTF()
+low/SacAlgorithm.critic_optimizer=@AdamTF()
+low/SacAlgorithm.alpha_optimizer=@fix/AdamTF()  # fixed alpha
+low/SacAlgorithm.initial_log_alpha=-4.6     # log(0.1)=-2.3; log(0.01)=-4.6; log(1e-3)=-6.9
+
+low/SacAlgorithm.critic_loss_ctor=@low/OneStepTDLoss
+low/OneStepTDLoss.gamma=1.0
+# low/OneStepTDLoss.gamma=@low/compute_discount_from_horizon()
+# low/compute_discount_from_horizon.T=%num_steps_per_skill
+
+# ========= 上层网络，预处理器，算法，训练配置 =========
+
+# =====》actor
+high/ActorDistributionNetwork.fc_layer_params=%high_hidden_layers
+high/ActorDistributionNetwork.continuous_projection_net_ctor=@NormalProjectionNetwork
+
+# =====》critic
+high/CriticNetwork.joint_fc_layer_params=%high_hidden_layers
+
+# =====》target
+high/calc_default_target_entropy.min_prob=0.05
+b_action/calc_default_target_entropy.min_prob=0.2
+high/TaacAlgorithm.target_entropy=(@high/calc_default_target_entropy, @b_action/calc_default_target_entropy)
+high/TaacAlgorithm.target_update_tau=%tau
+high/TaacAlgorithm.target_update_period=%target_update_period
+
+# =====》SAC & optimizer
+high/TaacAlgorithm.name="Higher_level_SAC"
+high/TaacAlgorithm.actor_network_cls=@high/ActorDistributionNetwork
+high/TaacAlgorithm.critic_network_cls=@high/CriticNetwork
+
+high/TaacAlgorithm.actor_optimizer=@AdamTF()
+high/TaacAlgorithm.critic_optimizer=@AdamTF()
+high/TaacAlgorithm.alpha_optimizer=@AdamTF()
+
+# ========= 判别器配置 =========
+disc/EncodingNetwork.fc_layer_params=(32, 32)
+
+# =====》判别器网络 & optimizer
+Discriminator.discriminator_ctor=@disc/EncodingNetwork
+Discriminator.skill_type="state_action"
+
+Discriminator.optimizer=@AdamTF()
+Discriminator.normalizer=True
+Discriminator.vae_model=True
+Discriminator.sub_noise=0.
+SkillGenerator.skill_noise=0.
+
+# ========= HIDIO_Agent配置 =========
+mini_batch_size=1024
+replay_buffer_length=100000  # per parallel actor
+
+HidioAgent.rl_algorithm_cls=@low/SacAlgorithm
+HidioAgent.skill_generator_cls=@SkillGenerator
+HidioAgent.skill_spec=%skill_spec
+HidioAgent.rl_observation_spec=%low_rl_input_specs
+HidioAgent.skill_boundary_discount=0.    # 1.
+HidioAgent.exp_reward_relabeling=True
+
+# ========= SkillGenerator配置 =========
+SkillGenerator.num_steps_per_skill=%num_steps_per_skill
+SkillGenerator.rl_algorithm_cls=@high/TaacAlgorithm
+SkillGenerator.rl_mini_batch_length=3
+SkillGenerator.rl_mini_batch_size=%mini_batch_size
+SkillGenerator.rl_replay_buffer_length=%replay_buffer_length
+SkillGenerator.disc_mini_batch_length=1
+SkillGenerator.disc_mini_batch_size=%mini_batch_size
+SkillGenerator.disc_replay_buffer_length=%replay_buffer_length
+
+# It will calculate the correct discounts and reward_per_step for high-level rl,
+# so that the rl is optimized as if in the original non-Hidio case with OneStepTDLoss.gamma=0.98.
+SkillGenerator.gamma=@high/compute_discount_from_horizon()
+high/compute_discount_from_horizon.T=%max_episode_step
+
+# ========= training config =========
+TrainerConfig.initial_collect_steps=10000
+TrainerConfig.num_env_steps=1000000
+TrainerConfig.num_iterations=0
+TrainerConfig.unroll_length=50
+TrainerConfig.num_updates_per_train_iter=40
+TrainerConfig.mini_batch_length=3
+TrainerConfig.mini_batch_size=%mini_batch_size
+TrainerConfig.replay_buffer_length=%replay_buffer_length
+
+TrainerConfig.evaluate=True
+TrainerConfig.eval_interval=50
+TrainerConfig.num_eval_episodes=20
+TrainerConfig.num_checkpoints=5
+
+TrainerConfig.use_rollout_state=True
+TrainerConfig.temporally_independent_train_step=True

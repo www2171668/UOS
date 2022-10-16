@@ -1,0 +1,47 @@
+
+# ========= 加载工具包 =========
+import alf.utils.dist_utils
+import hidio.utils
+
+# ========= 加载算法类 =========
+import hidio.algorithm.hidio_agent
+import hidio.algorithm.skill_generator
+import hidio.algorithm.discriminator
+import alf.algorithms.sac_algorithm
+import alf.networks.preprocessors
+
+TrainerConfig.algorithm_ctor=@HidioAgent
+
+# ========= 常用设置 =========
+TrainerConfig.whole_replay_buffer_training=False
+TrainerConfig.clear_replay_buffer=False
+
+# ========= 获取信息规格 =========
+observation_spec=@get_observation_spec()
+action_spec=@get_action_spec()
+
+skill_dim=8
+skill_spec=@create_skill_spec()
+create_skill_spec.num_of_skills=%skill_dim
+
+# ========= 网络参数，训练参数 =========
+num_steps_per_skill=3
+low_hidden_dim=128
+low_hidden_layers=(%low_hidden_dim, %low_hidden_dim)
+high_hidden_layers=(256, 256, 256)
+
+# 高斯分布设定
+NormalProjectionNetwork.state_dependent_std=True
+NormalProjectionNetwork.scale_distribution=True
+NormalProjectionNetwork.std_transform=@clipped_exp
+
+# ========= 下层输入observation_spec和预处理器 =========
+get_low_rl_input_spec.observation_spec=%observation_spec
+get_low_rl_input_spec.action_spec=%action_spec
+get_low_rl_input_spec.num_steps_per_skill=%num_steps_per_skill
+get_low_rl_input_spec.skill_spec=%skill_spec
+low_rl_input_specs = @get_low_rl_input_spec()
+
+get_low_rl_input_preprocessors.low_rl_input_specs=%low_rl_input_specs
+get_low_rl_input_preprocessors.embedding_dim=%low_hidden_dim  # 125的预处理
+low_input_preprocessors = @get_low_rl_input_preprocessors()  # 预处理器

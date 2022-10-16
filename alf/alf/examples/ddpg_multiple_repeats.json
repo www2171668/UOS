@@ -1,0 +1,11 @@
+{
+  "desc": "Multiple Repeats Example For DDPG",
+  "use_gpu": true,
+  "gpus": [
+    0,
+    1
+  ],
+  "repeats": 2,
+  "max_worker_num": 2,
+  "cpu_num": 2
+}
